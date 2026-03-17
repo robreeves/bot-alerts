@@ -62,23 +62,26 @@ render_alert() {
   [[ -n "$context" ]] && OUTPUT+="    $context"$'\n'
 }
 
-# Parse JSON alerts from a file/stream and call render_alert for each.
-# Args: host json_content
+# Render all alerts from combined JSON (newline-separated objects with _host field),
+# sorted oldest-first by timestamp.
 process_alerts() {
-  local host="$1" json_content="$2"
-  [[ -z "$json_content" ]] && return
+  local json_content="$1"
+  [[ -z "$json_content" ]] && return 0
 
-  local count
-  count=$(echo "$json_content" | jq -s 'length' 2>/dev/null) || return
+  local count sorted
+  count=$(echo "$json_content" | jq -s 'length' 2>/dev/null) || return 0
+  [[ "$count" -eq 0 ]] && return 0
+  sorted=$(echo "$json_content" | jq -s 'sort_by(.timestamp)' 2>/dev/null) || return 0
+
   for ((i = 0; i < count; i++)); do
-    local pid tmux_session tmux_pane git_branch event timestamp project context
-    read -r pid tmux_session tmux_pane git_branch event timestamp project < <(
-      echo "$json_content" | jq -s -r ".[$i] |
-        [((.pid//\"\")|tostring), (.tmux_session//\"\"), (.tmux_pane//\"\"),
+    local host pid tmux_session tmux_pane git_branch event timestamp project context
+    read -r host pid tmux_session tmux_pane git_branch event timestamp project < <(
+      echo "$sorted" | jq -r ".[$i] |
+        [(._host//\"\"), ((.pid//\"\")|tostring), (.tmux_session//\"\"), (.tmux_pane//\"\"),
          (.git_branch//\"\"), (.event//\"\"), (.timestamp//\"\"),
          (.project//.cwd//\"\")] | @tsv" 2>/dev/null
     ) || continue
-    context=$(echo "$json_content" | jq -s -r ".[$i] | .context // \"\"" 2>/dev/null) || continue
+    context=$(echo "$sorted" | jq -r ".[$i] | .context // \"\"" 2>/dev/null) || continue
 
     render_alert "$host" "$pid" "$tmux_session" "$tmux_pane" \
                  "$git_branch" "$event" "$timestamp" "$project" "$context" || continue
@@ -88,24 +91,22 @@ process_alerts() {
 render() {
   INDEX=0
   OUTPUT=""
+  local all_json=""
 
-  # --- Local alerts ---
-  local local_json=""
+  # --- Collect local alerts (tagged with empty _host) ---
   shopt -s nullglob
   local files=("$ALERTS_DIR"/*.json)
   shopt -u nullglob
 
   for file in "${files[@]}"; do
-    local content
+    local content tagged
     content=$(cat "$file" 2>/dev/null) || continue
-    if [[ -n "$local_json" ]]; then
-      local_json+=$'\n'
-    fi
-    local_json+="$content"
+    tagged=$(echo "$content" | jq -c '. + {_host: ""}' 2>/dev/null) || continue
+    [[ -n "$all_json" ]] && all_json+=$'\n'
+    all_json+="$tagged"
   done
-  process_alerts "" "$local_json"
 
-  # --- Remote alerts ---
+  # --- Collect remote alerts (tagged with hostname) ---
   if [[ ${#REMOTE_HOSTS[@]} -gt 0 ]]; then
     local tmpdir
     tmpdir=$(mktemp -d)
@@ -115,16 +116,21 @@ render() {
         'DIR="${BOT_ALERTS_DIR:-$HOME/.claude/alerts}"; for f in "$DIR"/*.json; do cat "$f" 2>/dev/null; printf "\n"; done' \
         > "$tmpdir/$host.json" 2>/dev/null &
     done
-    wait
+    wait || true
 
     for host in "${REMOTE_HOSTS[@]}"; do
-      local remote_json
-      remote_json=$(cat "$tmpdir/$host.json" 2>/dev/null) || continue
-      process_alerts "$host" "$remote_json"
+      local remote_content tagged_remote
+      remote_content=$(cat "$tmpdir/$host.json" 2>/dev/null) || continue
+      [[ -z "$remote_content" ]] && continue
+      tagged_remote=$(echo "$remote_content" | jq -sc --arg h "$host" '.[] | . + {_host: $h}' 2>/dev/null) || continue
+      [[ -n "$all_json" && -n "$tagged_remote" ]] && all_json+=$'\n'
+      all_json+="$tagged_remote"
     done
 
     rm -rf "$tmpdir"
   fi
+
+  process_alerts "$all_json"
 
   # --- Display ---
   clear
