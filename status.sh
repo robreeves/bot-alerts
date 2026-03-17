@@ -52,8 +52,8 @@ render_alert() {
   [[ -n "$event" ]] && header+="  |  $event"
   [[ -n "$timestamp" ]] && header+="  |  ${timestamp:0:16}"
 
-  if [[ ${#context} -gt 100 ]]; then
-    context="${context:0:100}..."
+  if [[ ${#context} -gt 500 ]]; then
+    context="${context:0:500}..."
   fi
 
   [[ $INDEX -gt 1 ]] && OUTPUT+=$'\n'
@@ -75,9 +75,10 @@ process_alerts() {
 
   for ((i = 0; i < count; i++)); do
     local host pid tmux_session tmux_pane git_branch event timestamp project context
-    read -r host pid tmux_session tmux_pane git_branch event timestamp project < <(
+    host=$(echo "$sorted" | jq -r ".[$i] | ._host // \"\"" 2>/dev/null) || continue
+    read -r pid tmux_session tmux_pane git_branch event timestamp project < <(
       echo "$sorted" | jq -r ".[$i] |
-        [(._host//\"\"), ((.pid//\"\")|tostring), (.tmux_session//\"\"), (.tmux_pane//\"\"),
+        [((.pid//\"\")|tostring), (.tmux_session//\"\"), (.tmux_pane//\"\"),
          (.git_branch//\"\"), (.event//\"\"), (.timestamp//\"\"),
          (.project//.cwd//\"\")] | @tsv" 2>/dev/null
     ) || continue
