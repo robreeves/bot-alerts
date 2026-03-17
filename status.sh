@@ -33,24 +33,22 @@ render_alert() {
     return 1
   fi
 
-  local tmux_info
-  if [[ -n "$tmux_session" ]]; then
-    tmux_info="$tmux_session / $tmux_pane"
-  else
-    tmux_info="(no tmux)"
-  fi
-
   INDEX=$((INDEX + 1))
 
-  local header="[$INDEX] "
-  if [[ -n "$host" ]]; then
-    header+="${host}:  $tmux_info"
-  else
-    header+="$tmux_info"
+  local display_ts=""
+  if [[ -n "$timestamp" ]]; then
+    local unix_ts
+    unix_ts=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${timestamp%Z}" "+%s" 2>/dev/null) \
+      && display_ts=$(date -r "$unix_ts" "+%Y-%m-%dT%H:%M" 2>/dev/null) \
+      || display_ts="${timestamp:0:16}"
   fi
+
+  local header="[$INDEX] "
+  [[ -n "$host" ]] && header+="${host}:  "
+  [[ -n "$project" ]] && header+="$project"
   [[ -n "$git_branch" ]] && header+="  |  $git_branch"
+  [[ -n "$display_ts" ]] && header+="  |  $display_ts"
   [[ -n "$event" ]] && header+="  |  $event"
-  [[ -n "$timestamp" ]] && header+="  |  ${timestamp:0:16}"
 
   if [[ ${#context} -gt 500 ]]; then
     context="${context:0:500}..."
@@ -58,7 +56,6 @@ render_alert() {
 
   [[ $INDEX -gt 1 ]] && OUTPUT+=$'\n'
   OUTPUT+="$header"$'\n'
-  [[ -n "$project" ]] && OUTPUT+="    $project"$'\n'
   [[ -n "$context" ]] && OUTPUT+="    $context"$'\n'
 }
 
@@ -76,11 +73,11 @@ process_alerts() {
   for ((i = 0; i < count; i++)); do
     local host pid tmux_session tmux_pane git_branch event timestamp project context
     host=$(echo "$sorted" | jq -r ".[$i] | ._host // \"\"" 2>/dev/null) || continue
-    read -r pid tmux_session tmux_pane git_branch event timestamp project < <(
+    IFS=$'\x01' read -r pid tmux_session tmux_pane git_branch event timestamp project < <(
       echo "$sorted" | jq -r ".[$i] |
         [((.pid//\"\")|tostring), (.tmux_session//\"\"), (.tmux_pane//\"\"),
          (.git_branch//\"\"), (.event//\"\"), (.timestamp//\"\"),
-         (.project//.cwd//\"\")] | @tsv" 2>/dev/null
+         (.project//.cwd//\"\")] | join(\"\u0001\")" 2>/dev/null
     ) || continue
     context=$(echo "$sorted" | jq -r ".[$i] | .context // \"\"" 2>/dev/null) || continue
 
