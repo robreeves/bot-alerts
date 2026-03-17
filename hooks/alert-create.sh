@@ -16,6 +16,7 @@ if [[ -z "$session_id" ]]; then
 fi
 
 project=$(basename "$cwd")
+git_branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 
 # Build context based on event type
 case "$hook_event" in
@@ -65,6 +66,7 @@ cat > "$tmp_file" <<EOF
   "cwd": $(echo "$cwd" | jq -R .),
   "project": $(echo "$project" | jq -R .),
   "event": $(echo "$hook_event" | jq -R .),
+  "git_branch": $(echo "$git_branch" | jq -R .),
   "context": $(echo "$context" | jq -R .),
   "pid": $pid
 }
