@@ -17,6 +17,8 @@ fi
 
 project=$cwd
 git_branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+tmux_session=$(tmux display-message -p '#S' 2>/dev/null || echo "")
+tmux_pane="${TMUX_PANE:-}"
 
 # Build context based on event type
 case "$hook_event" in
@@ -67,6 +69,8 @@ cat > "$tmp_file" <<EOF
   "project": $(echo "$project" | jq -R .),
   "event": $(echo "$hook_event" | jq -R .),
   "git_branch": $(echo "$git_branch" | jq -R .),
+  "tmux_session": $(echo "$tmux_session" | jq -R .),
+  "tmux_pane": $(echo "$tmux_pane" | jq -R .),
   "context": $(echo "$context" | jq -R .),
   "pid": $pid
 }
