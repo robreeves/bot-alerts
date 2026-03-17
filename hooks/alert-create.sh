@@ -15,7 +15,7 @@ if [[ -z "$session_id" ]]; then
   exit 0
 fi
 
-project=$(basename "$cwd")
+project=$cwd
 git_branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 
 # Build context based on event type
