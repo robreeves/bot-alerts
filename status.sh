@@ -98,7 +98,7 @@ render() {
   local files=("$ALERTS_DIR"/*.json)
   shopt -u nullglob
 
-  for file in "${files[@]}"; do
+  for file in "${files[@]+"${files[@]}"}"; do
     local content tagged
     content=$(cat "$file" 2>/dev/null) || continue
     tagged=$(echo "$content" | jq -c '. + {_host: ""}' 2>/dev/null) || continue
