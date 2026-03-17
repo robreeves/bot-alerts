@@ -129,7 +129,7 @@ def render(hosts):
         header = f"[{i}] "
         if host:
             header += f"{host}:  "
-        fields = [f for f in [project, branch, ts, event] if f]
+        fields = [f for f in [event, project, branch, ts] if f]
         header += "  |  ".join(fields)
 
         block = header
