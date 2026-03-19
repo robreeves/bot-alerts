@@ -99,7 +99,7 @@ def format_timestamp(ts_str):
         return ""
     try:
         dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        return dt.astimezone().strftime("%Y-%m-%dT%H:%M")
+        return dt.astimezone().strftime("%Y-%m-%d %I:%M %p")
     except Exception:
         return ts_str[:16]
 
