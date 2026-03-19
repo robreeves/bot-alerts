@@ -17,8 +17,12 @@ fi
 
 project=$cwd
 git_branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-tmux_session=$(tmux display-message -p '#S' 2>/dev/null || echo "")
 tmux_pane="${TMUX_PANE:-}"
+if [ -n "$tmux_pane" ]; then
+    tmux_session=$(tmux display-message -p '#S' 2>/dev/null || echo "")
+else
+    tmux_session=""
+fi
 
 # Build context based on event type
 case "$hook_event" in

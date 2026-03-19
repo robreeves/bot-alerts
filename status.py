@@ -151,9 +151,9 @@ def render(hosts):
 
 def approve_alert(alert):
     host = alert.get("_host", "")
-    pane = alert.get("tmux_pane") or alert.get("tmux_session") or ""
+    pane = alert.get("tmux_pane") or ""
     if not pane:
-        return
+        return False
 
     if host:
         subprocess.run(
@@ -171,6 +171,7 @@ def approve_alert(alert):
         subprocess.run(["tmux", "send-keys", "-t", pane, "1"], capture_output=True)
         time.sleep(0.1)
         subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], capture_output=True)
+    return True
 
 
 def main():
@@ -191,23 +192,29 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
 
     tty.setcbreak(sys.stdin.fileno())
+    status_msg = ""
     try:
         while True:
             live = render(hosts)
             print(f"\n{'─' * 60}")
+            if status_msg:
+                print(status_msg)
             print("Press [1-9] to approve  |  q to quit")
 
             ready, _, _ = select.select([sys.stdin], [], [], 2)
             if not ready:
+                status_msg = ""
                 continue
 
             key = sys.stdin.read(1)
             if key == "q":
                 break
+            status_msg = ""
             if key.isdigit() and key != "0":
                 idx = int(key) - 1
                 if 0 <= idx < len(live):
-                    approve_alert(live[idx])
+                    if not approve_alert(live[idx]):
+                        status_msg = f"[{idx + 1}] has no tmux session"
     finally:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
