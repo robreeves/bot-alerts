@@ -6,10 +6,13 @@ Usage: ./status.py [--once|-1] [host1 host2 ...]
 
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
+import termios
 import time
+import tty
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,23 +146,70 @@ def render(hosts):
     print("\033[2J\033[H", end="")  # clear screen
     print("\n\n\n".join(blocks) if blocks else "(no alerts)")
 
+    return live
+
+
+def approve_alert(alert):
+    host = alert.get("_host", "")
+    pane = alert.get("tmux_pane") or alert.get("tmux_session") or ""
+    if not pane:
+        return
+
+    if host:
+        subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host,
+             f"tmux send-keys -t {pane} 1"],
+            timeout=5, capture_output=True,
+        )
+        time.sleep(0.1)
+        subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host,
+             f"tmux send-keys -t {pane} Enter"],
+            timeout=5, capture_output=True,
+        )
+    else:
+        subprocess.run(["tmux", "send-keys", "-t", pane, "1"], capture_output=True)
+        time.sleep(0.1)
+        subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], capture_output=True)
+
 
 def main():
     once, hosts = parse_args()
 
+    if once:
+        render(hosts)
+        return
+
+    old_settings = termios.tcgetattr(sys.stdin)
+
     def handle_signal(sig, frame):
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
         print()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    if once:
-        render(hosts)
-    else:
+    tty.setcbreak(sys.stdin.fileno())
+    try:
         while True:
-            render(hosts)
-            time.sleep(2)
+            live = render(hosts)
+            print(f"\n{'─' * 60}")
+            print("Press [1-9] to approve  |  q to quit")
+
+            ready, _, _ = select.select([sys.stdin], [], [], 2)
+            if not ready:
+                continue
+
+            key = sys.stdin.read(1)
+            if key == "q":
+                break
+            if key.isdigit() and key != "0":
+                idx = int(key) - 1
+                if 0 <= idx < len(live):
+                    approve_alert(live[idx])
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
 
 if __name__ == "__main__":
