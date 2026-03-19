@@ -24,33 +24,84 @@ tmux_pane="${TMUX_PANE:-}"
 case "$hook_event" in
   Stop)
     raw_context=$(echo "$hook_json" | jq -r '.last_assistant_message // ""')
-    context=$(echo "$raw_context" | head -c 500)
+    context=$(echo "$raw_context" | head -c 5000)
     ;;
   PreToolUse)
-    # AskUserQuestion: format questions from tool_input
-    questions=$(echo "$hook_json" | jq -r '
-      .tool_input.questions //
-      (if .tool_input.question then [.tool_input.question] else [] end) |
-      if type == "array" then
-        map(
-          if type == "object" then .question // tostring
-          else tostring
-          end
-        ) | join(" | ")
-      else tostring
-      end
-    ' 2>/dev/null || echo "")
-    context=$(echo "$questions" | head -c 500)
+    tool_name=$(echo "$hook_json" | jq -r '.tool_name // ""')
+    # Format context based on tool type
+    case "$tool_name" in
+      Bash)
+        desc=$(echo "$hook_json" | jq -r '.tool_input.description // ""')
+        cmd=$(echo "$hook_json" | jq -r '.tool_input.command // ""')
+        context="Bash"
+        if [[ -n "$desc" ]]; then
+          context="${context}: ${desc}"
+        fi
+        if [[ -n "$cmd" ]]; then
+          context="${context}"$'\n'"${cmd}"
+        fi
+        ;;
+      Edit)
+        file=$(echo "$hook_json" | jq -r '.tool_input.file_path // ""')
+        old=$(echo "$hook_json" | jq -r '.tool_input.old_string // ""')
+        new=$(echo "$hook_json" | jq -r '.tool_input.new_string // ""')
+        context="Edit: ${file}"$'\n'"- ${old}"$'\n'"+ ${new}"
+        ;;
+      Write)
+        file=$(echo "$hook_json" | jq -r '.tool_input.file_path // ""')
+        content=$(echo "$hook_json" | jq -r '.tool_input.content // ""')
+        context="Write: ${file}"$'\n'"${content}"
+        ;;
+      AskUserQuestion)
+        context=$(echo "$hook_json" | jq -r '
+          [.tool_input.questions[]? |
+            (.question // "") + "\n" +
+            ([.options[]? |
+              "  " + (.label // "") +
+              (if .description then "\n     " + .description else "" end)
+            ] | to_entries | map("  \(.key + 1). " + .value) | join("\n"))
+          ] | join("\n\n")
+        ' 2>/dev/null || echo "")
+        ;;
+      *)
+        # Generic: show tool name + JSON tool_input
+        input=$(echo "$hook_json" | jq -c '.tool_input // {}')
+        context="${tool_name}: ${input}"
+        ;;
+    esac
+    context=$(echo "$context" | head -c 5000)
     ;;
   Notification)
-    title=$(echo "$hook_json" | jq -r '.title // ""')
-    message=$(echo "$hook_json" | jq -r '.message // ""')
-    if [[ -n "$title" ]]; then
-      context="${title}: ${message}"
+    # If a PreToolUse alert already exists for this session, don't overwrite it
+    # (PreToolUse has richer context like the full command)
+    alert_file="$ALERTS_DIR/${session_id}.json"
+    if [[ -f "$alert_file" ]]; then
+      existing_event=$(jq -r '.event // ""' "$alert_file" 2>/dev/null || echo "")
+      if [[ "$existing_event" == "PreToolUse" ]]; then
+        # Update event to Notification but keep the existing context
+        existing_context=$(jq -r '.context // ""' "$alert_file" 2>/dev/null || echo "")
+        context="$existing_context"
+        # Fall through to write updated alert with Notification event
+      else
+        title=$(echo "$hook_json" | jq -r '.title // ""')
+        message=$(echo "$hook_json" | jq -r '.message // ""')
+        if [[ -n "$title" ]]; then
+          context="${title}: ${message}"
+        else
+          context="$message"
+        fi
+        context=$(echo "$context" | head -c 5000)
+      fi
     else
-      context="$message"
+      title=$(echo "$hook_json" | jq -r '.title // ""')
+      message=$(echo "$hook_json" | jq -r '.message // ""')
+      if [[ -n "$title" ]]; then
+        context="${title}: ${message}"
+      else
+        context="$message"
+      fi
+      context=$(echo "$context" | head -c 5000)
     fi
-    context=$(echo "$context" | head -c 500)
     ;;
   *)
     context=""
@@ -61,19 +112,28 @@ timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 pid=$PPID
 
 tmp_file=$(mktemp "$ALERTS_DIR/.tmp.XXXXXX")
-cat > "$tmp_file" <<EOF
-{
-  "session_id": $(echo "$session_id" | jq -R .),
-  "timestamp": $(echo "$timestamp" | jq -R .),
-  "cwd": $(echo "$cwd" | jq -R .),
-  "project": $(echo "$project" | jq -R .),
-  "event": $(echo "$hook_event" | jq -R .),
-  "git_branch": $(echo "$git_branch" | jq -R .),
-  "tmux_session": $(echo "$tmux_session" | jq -R .),
-  "tmux_pane": $(echo "$tmux_pane" | jq -R .),
-  "context": $(echo "$context" | jq -R .),
-  "pid": $pid
-}
-EOF
+jq -n \
+  --arg session_id "$session_id" \
+  --arg timestamp "$timestamp" \
+  --arg cwd "$cwd" \
+  --arg project "$project" \
+  --arg event "$hook_event" \
+  --arg git_branch "$git_branch" \
+  --arg tmux_session "$tmux_session" \
+  --arg tmux_pane "$tmux_pane" \
+  --arg context "$context" \
+  --argjson pid "$pid" \
+  '{
+    session_id: $session_id,
+    timestamp: $timestamp,
+    cwd: $cwd,
+    project: $project,
+    event: $event,
+    git_branch: $git_branch,
+    tmux_session: $tmux_session,
+    tmux_pane: $tmux_pane,
+    context: $context,
+    pid: $pid
+  }' > "$tmp_file"
 
 mv "$tmp_file" "$ALERTS_DIR/${session_id}.json"

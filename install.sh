@@ -30,9 +30,8 @@ updated=$(jq \
   --arg cleanup "$CLEANUP" \
   '
   .hooks.Stop = ((.hooks.Stop // []) + [{"hooks": [{"type": "command", "command": $create}]}]) |
-  .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": $create}]}]) |
+  .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{"hooks": [{"type": "command", "command": $create}]}]) |
   .hooks.Notification = ((.hooks.Notification // []) + [{"hooks": [{"type": "command", "command": $create}]}]) |
-  .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{"hooks": [{"type": "command", "command": $cleanup}]}]) |
   .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{"hooks": [{"type": "command", "command": $cleanup}]}]) |
   .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) + [{"hooks": [{"type": "command", "command": $cleanup}]}]) |
   .hooks.SessionEnd = ((.hooks.SessionEnd // []) + [{"hooks": [{"type": "command", "command": $cleanup}]}])

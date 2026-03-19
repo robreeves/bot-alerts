@@ -124,7 +124,7 @@ def render(hosts):
         branch = a.get("git_branch", "")
         event = a.get("event", "")
         ts = format_timestamp(a.get("timestamp", ""))
-        context = (a.get("context") or "")[:500]
+        context = a.get("context") or ""
 
         header = f"[{i}] "
         if host:
@@ -134,7 +134,9 @@ def render(hosts):
 
         block = header
         if context:
-            block += f"\n    {context}"
+            indent = "    "
+            indented = "\n".join(indent + line for line in context.splitlines())
+            block += f"\n{indented}"
         blocks.append(block)
 
     print("\033[2J\033[H", end="")  # clear screen

@@ -25,7 +25,6 @@ updated=$(jq \
   .hooks.Stop = ((.hooks.Stop // []) | remove_bot_alerts($create)) |
   .hooks.PreToolUse = ((.hooks.PreToolUse // []) | remove_bot_alerts($create)) |
   .hooks.Notification = ((.hooks.Notification // []) | remove_bot_alerts($create)) |
-  .hooks.PreToolUse = ((.hooks.PreToolUse // []) | remove_bot_alerts($cleanup)) |
   .hooks.PostToolUse = ((.hooks.PostToolUse // []) | remove_bot_alerts($cleanup)) |
   .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) | remove_bot_alerts($cleanup)) |
   .hooks.SessionEnd = ((.hooks.SessionEnd // []) | remove_bot_alerts($cleanup))
