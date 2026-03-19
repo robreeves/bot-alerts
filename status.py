@@ -135,12 +135,13 @@ def render(hosts):
         block = header
         if context:
             indent = "    "
+            separator = indent + "─" * 60
             indented = "\n".join(indent + line for line in context.splitlines())
-            block += f"\n{indented}"
+            block += f"\n{separator}\n{indented}"
         blocks.append(block)
 
     print("\033[2J\033[H", end="")  # clear screen
-    print("\n\n".join(blocks) if blocks else "(no alerts)")
+    print("\n\n\n".join(blocks) if blocks else "(no alerts)")
 
 
 def main():
