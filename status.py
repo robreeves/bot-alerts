@@ -115,6 +115,9 @@ def render(hosts):
         if a.get("_host") == "":  # local — check PID liveness
             pid = a.get("pid")
             if pid and not pid_alive(pid):
+                sid = a.get("session_id")
+                if sid:
+                    (alerts_dir() / f"{sid}.json").unlink(missing_ok=True)
                 continue
         live.append(a)
 
@@ -147,6 +150,23 @@ def render(hosts):
     print("\n\n\n".join(blocks) if blocks else "(no alerts)")
 
     return live
+
+
+def delete_alert(alert):
+    session_id = alert.get("session_id")
+    if not session_id:
+        return False
+    host = alert.get("_host", "")
+    if host:
+        subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host,
+             f'rm -f "${{BOT_ALERTS_DIR:-$HOME/.claude/alerts}}/{session_id}.json"'],
+            timeout=5, capture_output=True,
+        )
+    else:
+        path = alerts_dir() / f"{session_id}.json"
+        path.unlink(missing_ok=True)
+    return True
 
 
 def approve_alert(alert):
@@ -199,7 +219,7 @@ def main():
             print(f"\n{'─' * 60}")
             if status_msg:
                 print(status_msg)
-            print("Press [1-9] to approve  |  q to quit")
+            print("Press [1-9] to approve  |  x[1-9] to dismiss  |  q to quit")
 
             ready, _, _ = select.select([sys.stdin], [], [], 2)
             if not ready:
@@ -210,7 +230,22 @@ def main():
             if key == "q":
                 break
             status_msg = ""
-            if key.isdigit() and key != "0":
+            if key == "x":
+                ready2, _, _ = select.select([sys.stdin], [], [], 2)
+                if ready2:
+                    key2 = sys.stdin.read(1)
+                    if key2.isdigit() and key2 != "0":
+                        idx = int(key2) - 1
+                        if 0 <= idx < len(live):
+                            delete_alert(live[idx])
+                            status_msg = f"Dismissed [{idx + 1}]"
+                        else:
+                            status_msg = f"No alert [{idx + 1}]"
+                    else:
+                        status_msg = "Dismiss cancelled"
+                else:
+                    status_msg = "Dismiss cancelled"
+            elif key.isdigit() and key != "0":
                 idx = int(key) - 1
                 if 0 <= idx < len(live):
                     if not approve_alert(live[idx]):
