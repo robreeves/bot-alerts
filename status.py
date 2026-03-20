@@ -169,6 +169,50 @@ def delete_alert(alert):
     return True
 
 
+def capture_pane(alert):
+    pane = alert.get("tmux_pane") or ""
+    if not pane:
+        return None
+    host = alert.get("_host", "")
+    try:
+        if host:
+            result = subprocess.run(
+                ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host,
+                 f"tmux capture-pane -t {pane} -p -S -100"],
+                capture_output=True, text=True, timeout=5,
+            )
+        else:
+            result = subprocess.run(
+                ["tmux", "capture-pane", "-t", pane, "-p", "-S", "-100"],
+                capture_output=True, text=True, timeout=5,
+            )
+        if result.returncode != 0:
+            return f"(capture failed: {result.stderr.strip() or 'exit ' + str(result.returncode)})"
+        return result.stdout
+    except Exception as e:
+        return f"(capture failed: {e})"
+
+
+def show_preview(index, content):
+    lines = content.rstrip("\n").splitlines()
+    term_height = os.get_terminal_size().lines
+    # Reserve 3 lines: blank, separator, status
+    available = term_height - 3
+    visible = lines[-available:] if len(lines) > available else lines
+
+    print("\033[2J\033[H", end="")  # clear screen
+    print("\n".join(visible))
+    # Pin status at bottom
+    print(f"\n{'─' * 60}")
+    print(f"Preview [{index}] — press Esc to return", end="", flush=True)
+    while True:
+        ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+        if ready:
+            key = sys.stdin.read(1)
+            if key == "\x1b":
+                return
+
+
 def approve_alert(alert):
     host = alert.get("_host", "")
     pane = alert.get("tmux_pane") or ""
@@ -219,7 +263,7 @@ def main():
             print(f"\n{'─' * 60}")
             if status_msg:
                 print(status_msg)
-            print("Press [1-9] to approve  |  x[1-9] to dismiss  |  q to quit")
+            print("Press [1-9] approve  |  x[1-9] dismiss  |  p[1-9] preview  |  q quit")
 
             ready, _, _ = select.select([sys.stdin], [], [], 2)
             if not ready:
@@ -230,21 +274,29 @@ def main():
             if key == "q":
                 break
             status_msg = ""
-            if key == "x":
+            if key in ("x", "p"):
+                action = key
                 ready2, _, _ = select.select([sys.stdin], [], [], 2)
                 if ready2:
                     key2 = sys.stdin.read(1)
                     if key2.isdigit() and key2 != "0":
                         idx = int(key2) - 1
                         if 0 <= idx < len(live):
-                            delete_alert(live[idx])
-                            status_msg = f"Dismissed [{idx + 1}]"
+                            if action == "x":
+                                delete_alert(live[idx])
+                                status_msg = f"Dismissed [{idx + 1}]"
+                            else:
+                                text = capture_pane(live[idx])
+                                if text is None:
+                                    status_msg = f"[{idx + 1}] has no tmux session"
+                                else:
+                                    show_preview(idx + 1, text)
                         else:
                             status_msg = f"No alert [{idx + 1}]"
                     else:
-                        status_msg = "Dismiss cancelled"
+                        status_msg = f"{'Dismiss' if action == 'x' else 'Preview'} cancelled"
                 else:
-                    status_msg = "Dismiss cancelled"
+                    status_msg = f"{'Dismiss' if action == 'x' else 'Preview'} cancelled"
             elif key.isdigit() and key != "0":
                 idx = int(key) - 1
                 if 0 <= idx < len(live):
