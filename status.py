@@ -17,6 +17,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
+# ANSI 256-color constants (Claude Code dark mode inspired)
+C_RESET = "\033[0m"
+C_ORANGE = "\033[38;5;215m"
+C_LAVENDER = "\033[38;5;183m"
+C_BLUE = "\033[38;5;111m"
+C_GREEN = "\033[38;5;114m"
+C_CYAN = "\033[38;5;117m"
+C_DIM = "\033[38;5;245m"
+C_DIMMER = "\033[38;5;240m"
+C_YELLOW = "\033[38;5;222m"
+
 
 def parse_args():
     once = False
@@ -132,22 +143,31 @@ def render(hosts):
         ts = format_timestamp(a.get("timestamp", ""))
         context = a.get("context") or ""
 
-        header = f"[{i}] "
+        header = f"{C_ORANGE}[{i}]{C_RESET} "
         if host:
-            header += f"{host}:  "
-        fields = [f for f in [event, project, branch, ts] if f]
-        header += "  |  ".join(fields)
+            header += f"{C_CYAN}{host}:{C_RESET}  "
+        pipe = f"  {C_DIMMER}|{C_RESET}  "
+        colored_fields = []
+        if event:
+            colored_fields.append(f"{C_LAVENDER}{event}{C_RESET}")
+        if project:
+            colored_fields.append(f"{C_BLUE}{project}{C_RESET}")
+        if branch:
+            colored_fields.append(f"{C_GREEN}{branch}{C_RESET}")
+        if ts:
+            colored_fields.append(f"{C_DIM}{ts}{C_RESET}")
+        header += pipe.join(colored_fields)
 
         block = header
         if context:
             indent = "    "
-            separator = indent + "─" * 60
+            separator = indent + f"{C_DIMMER}" + "─" * 60 + f"{C_RESET}"
             indented = "\n".join(indent + line for line in context.splitlines())
             block += f"\n{separator}\n{indented}"
         blocks.append(block)
 
     print("\033[2J\033[H", end="")  # clear screen
-    print("\n\n\n".join(blocks) if blocks else "(no alerts)")
+    print("\n\n\n".join(blocks) if blocks else f"{C_DIM}(no alerts){C_RESET}")
 
     return live
 
@@ -203,8 +223,8 @@ def show_preview(index, content):
     print("\033[2J\033[H", end="")  # clear screen
     print("\n".join(visible))
     # Pin status at bottom
-    print(f"\n{'─' * 60}")
-    print(f"Preview [{index}] — press Esc to return", end="", flush=True)
+    print(f"\n{C_DIMMER}{'─' * 60}{C_RESET}")
+    print(f"{C_LAVENDER}Preview {C_ORANGE}[{index}]{C_RESET} {C_DIM}— press Esc to return{C_RESET}", end="", flush=True)
     while True:
         ready, _, _ = select.select([sys.stdin], [], [], 0.5)
         if ready:
@@ -260,10 +280,10 @@ def main():
     try:
         while True:
             live = render(hosts)
-            print(f"\n{'─' * 60}")
+            print(f"\n{C_DIMMER}{'─' * 60}{C_RESET}")
             if status_msg:
-                print(status_msg)
-            print("Press [1-9] approve  |  x[1-9] dismiss  |  p[1-9] preview  |  q quit")
+                print(f"{C_YELLOW}{status_msg}{C_RESET}")
+            print(f"{C_DIM}Press{C_RESET} {C_ORANGE}[1-9]{C_RESET} {C_DIM}approve  |  {C_ORANGE}x[1-9]{C_RESET} {C_DIM}dismiss  |  {C_ORANGE}p[1-9]{C_RESET} {C_DIM}preview  |  {C_ORANGE}q{C_RESET} {C_DIM}quit{C_RESET}")
 
             ready, _, _ = select.select([sys.stdin], [], [], 2)
             if not ready:
