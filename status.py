@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Live-updating Claude Code alert viewer.
 
-Usage: ./status.py [--once|-1] [host1 host2 ...]
+Usage: ./status.py [--once|-1] [--debug] [host1 host2 ...]
 """
 
 import json
+import logging
 import os
 import select
 import signal
@@ -16,6 +17,9 @@ import tty
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import mkdtemp
+
+log = logging.getLogger("bot-alerts")
 
 # ANSI 256-color constants (Claude Code dark mode inspired)
 C_RESET = "\033[0m"
@@ -31,13 +35,16 @@ C_YELLOW = "\033[38;5;222m"
 
 def parse_args():
     once = False
+    debug = False
     hosts = []
     for arg in sys.argv[1:]:
         if arg in ("--once", "-1"):
             once = True
+        elif arg == "--debug":
+            debug = True
         else:
             hosts.append(arg)
-    return once, hosts
+    return once, debug, hosts
 
 
 def alerts_dir():
@@ -50,6 +57,48 @@ def pid_alive(pid):
         return True
     except (OSError, ProcessLookupError, ValueError):
         return False
+
+
+_ssh_control_dir = None
+
+
+def ssh_control_dir():
+    global _ssh_control_dir
+    if _ssh_control_dir is None:
+        _ssh_control_dir = mkdtemp(prefix="bot-alerts-ssh-")
+        log.debug("created ssh control dir: %s", _ssh_control_dir)
+    return _ssh_control_dir
+
+
+def ssh_cleanup():
+    d = _ssh_control_dir
+    if d is None:
+        return
+    import shutil
+    # Close all master connections
+    for f in Path(d).glob("*"):
+        try:
+            subprocess.run(
+                ["ssh", "-o", f"ControlPath={f}", "-O", "exit", "dummy"],
+                capture_output=True, timeout=3,
+            )
+        except Exception:
+            pass
+    shutil.rmtree(d, ignore_errors=True)
+
+
+def ssh_cmd(host, remote_cmd):
+    control_path = str(Path(ssh_control_dir()) / "%r@%h:%p")
+    return [
+        "ssh",
+        "-o", "ConnectTimeout=3",
+        "-o", "BatchMode=yes",
+        "-o", f"ControlPath={control_path}",
+        "-o", "ControlMaster=auto",
+        "-o", "ControlPersist=60",
+        host,
+        remote_cmd,
+    ]
 
 
 def parse_json_stream(text):
@@ -82,29 +131,38 @@ def load_local_alerts():
 
 
 def fetch_remote_alerts(host):
-    cmd = [
-        "ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host,
+    cmd = ssh_cmd(
+        host,
         'DIR="${BOT_ALERTS_DIR:-$HOME/.claude/alerts}"; '
         'for f in "$DIR"/*.json; do cat "$f" 2>/dev/null; printf "\\n"; done',
-    ]
+    )
     try:
+        log.debug("fetching alerts from %s", host)
+        t0 = time.monotonic()
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        elapsed = time.monotonic() - t0
         alerts = []
         for obj in parse_json_stream(result.stdout):
             obj["_host"] = host
             alerts.append(obj)
+        log.debug("fetched %d alerts from %s in %.3fs (rc=%d)", len(alerts), host, elapsed, result.returncode)
+        if result.stderr.strip():
+            log.debug("ssh stderr from %s: %s", host, result.stderr.strip())
         return alerts
-    except Exception:
+    except Exception as e:
+        log.debug("fetch_remote_alerts(%s) failed: %s", host, e)
         return []
 
 
 def load_all_alerts(hosts):
     alerts = load_local_alerts()
+    log.debug("loaded %d local alerts", len(alerts))
     if hosts:
         with ThreadPoolExecutor(max_workers=len(hosts)) as executor:
             futures = [executor.submit(fetch_remote_alerts, h) for h in hosts]
             for f in as_completed(futures):
                 alerts.extend(f.result())
+    log.debug("total alerts: %d", len(alerts))
     return alerts
 
 
@@ -119,6 +177,7 @@ def format_timestamp(ts_str):
 
 
 def render(hosts):
+    t0 = time.monotonic()
     alerts = load_all_alerts(hosts)
 
     live = []
@@ -166,6 +225,9 @@ def render(hosts):
             block += f"\n{separator}\n{indented}"
         blocks.append(block)
 
+    elapsed = time.monotonic() - t0
+    log.debug("render: %d live alerts, %.3fs", len(live), elapsed)
+
     print("\033[2J\033[H", end="")  # clear screen
     print("\n\n\n".join(blocks) if blocks else f"{C_DIM}(no alerts){C_RESET}")
 
@@ -179,8 +241,7 @@ def delete_alert(alert):
     host = alert.get("_host", "")
     if host:
         subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host,
-             f'rm -f "${{BOT_ALERTS_DIR:-$HOME/.claude/alerts}}/{session_id}.json"'],
+            ssh_cmd(host, f'rm -f "${{BOT_ALERTS_DIR:-$HOME/.claude/alerts}}/{session_id}.json"'),
             timeout=5, capture_output=True,
         )
     else:
@@ -197,8 +258,7 @@ def capture_pane(alert):
     try:
         if host:
             result = subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host,
-                 f"tmux capture-pane -t {pane} -p -S -100"],
+                ssh_cmd(host, f"tmux capture-pane -t {pane} -p -S -100"),
                 capture_output=True, text=True, timeout=5,
             )
         else:
@@ -241,14 +301,12 @@ def approve_alert(alert):
 
     if host:
         subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host,
-             f"tmux send-keys -t {pane} 1"],
+            ssh_cmd(host, f"tmux send-keys -t {pane} 1"),
             timeout=5, capture_output=True,
         )
         time.sleep(0.1)
         subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host,
-             f"tmux send-keys -t {pane} Enter"],
+            ssh_cmd(host, f"tmux send-keys -t {pane} Enter"),
             timeout=5, capture_output=True,
         )
     else:
@@ -259,7 +317,17 @@ def approve_alert(alert):
 
 
 def main():
-    once, hosts = parse_args()
+    once, debug, hosts = parse_args()
+
+    if debug:
+        log_path = Path(os.environ.get("BOT_ALERTS_DIR", Path.home() / ".claude" / "alerts")) / "status-debug.log"
+        logging.basicConfig(
+            filename=str(log_path),
+            level=logging.DEBUG,
+            format="%(asctime)s %(message)s",
+            datefmt="%H:%M:%S",
+        )
+        log.debug("starting status.py, hosts=%s, once=%s", hosts, once)
 
     if once:
         render(hosts)
@@ -270,6 +338,7 @@ def main():
     def cleanup():
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
         print("\033[?1049l", end="", flush=True)  # exit alternate screen
+        ssh_cleanup()
 
     def handle_signal(sig, frame):
         cleanup()
@@ -296,6 +365,7 @@ def main():
                 continue
 
             key = sys.stdin.read(1)
+            log.debug("keypress: %r", key)
             if key == "q":
                 break
             status_msg = ""
