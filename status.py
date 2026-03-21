@@ -267,14 +267,19 @@ def main():
 
     old_settings = termios.tcgetattr(sys.stdin)
 
-    def handle_signal(sig, frame):
+    def cleanup():
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        print("\033[?1049l", end="", flush=True)  # exit alternate screen
+
+    def handle_signal(sig, frame):
+        cleanup()
         print()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    print("\033[?1049h", end="", flush=True)  # enter alternate screen
     tty.setcbreak(sys.stdin.fileno())
     status_msg = ""
     try:
@@ -323,7 +328,7 @@ def main():
                     if not approve_alert(live[idx]):
                         status_msg = f"[{idx + 1}] has no tmux session"
     finally:
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        cleanup()
 
 
 if __name__ == "__main__":
