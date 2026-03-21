@@ -4,6 +4,7 @@
 Usage: ./status.py [--once|-1] [--debug] [host1 host2 ...]
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -65,7 +66,7 @@ _ssh_control_dir = None
 def ssh_control_dir():
     global _ssh_control_dir
     if _ssh_control_dir is None:
-        _ssh_control_dir = mkdtemp(prefix="bot-alerts-ssh-")
+        _ssh_control_dir = mkdtemp(prefix="ba-", dir="/tmp")
         log.debug("created ssh control dir: %s", _ssh_control_dir)
     return _ssh_control_dir
 
@@ -88,7 +89,9 @@ def ssh_cleanup():
 
 
 def ssh_cmd(host, remote_cmd):
-    control_path = str(Path(ssh_control_dir()) / "%r@%h:%p")
+    # Use a hash to keep the socket path under the 104-byte macOS limit
+    h = hashlib.md5(host.encode()).hexdigest()[:12]
+    control_path = str(Path(ssh_control_dir()) / h)
     return [
         "ssh",
         "-o", "ConnectTimeout=3",
